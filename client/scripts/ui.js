@@ -256,15 +256,11 @@ class ReceiveDialog extends Dialog {
         }, 300);
     }
 
-    _displayFile(file) {
+    _displayFileCont(file, url) {
         const $a = this.$el.querySelector('#download');
-        const url = URL.createObjectURL(file.blob);
-        $a.href = url;
-        $a.download = file.name;
-
         if(this._autoDownload()){
-            $a.click()
-            return
+            $a.click();
+            return;
         }
         if(file.mime.split('/')[0] === 'image'){
             console.log('the file is image');
@@ -275,13 +271,44 @@ class ReceiveDialog extends Dialog {
         this.$el.querySelector('#fileName').textContent = file.name;
         this.$el.querySelector('#fileSize').textContent = this._formatFileSize(file.size);
         this.show();
+    }
 
-        if (window.isDownloadSupported) return;
-        // fallback for iOS
-        $a.target = '_blank';
-        const reader = new FileReader();
-        reader.onload = e => $a.href = reader.result;
-        reader.readAsDataURL(file.blob);
+    _displayFile(file) {
+
+        const $a = this.$el.querySelector('#download');
+        const url = URL.createObjectURL(file.blob);
+
+        if (window.iOS) {
+
+            // ios safari would try to open blob rather than download it, and for pdf blob it fails with error "WebKitBlobResource error 1"
+            // the workaround is to convert the blob to data url with type application/octet-stream to enforce download
+
+            const reader = new FileReader();
+            const self = this;
+            reader.onload = () => {
+                $a.download = file.name;
+                $a.href = reader.result.replace(/^data:.*;/i, 'data:application/octet-stream;');
+                self._displayFileCont(file, url);
+            };
+            reader.readAsDataURL(file.blob);
+            return;
+        }
+
+        if (window.isDownloadSupported) {
+            $a.download = file.name;
+            $a.href = url;
+            this._displayFileCont(file, url);
+        }
+        else {
+            const reader = new FileReader();
+            const self = this;
+            reader.onload = () => {
+                $a.target = '_blank';
+                $a.href = reader.result;
+                self._displayFileCont(file, url);
+            };
+            reader.readAsDataURL(file.blob);
+        }
     }
 
     _formatFileSize(bytes) {
