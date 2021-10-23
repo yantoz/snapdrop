@@ -1,5 +1,6 @@
 window.URL = window.URL || window.webkitURL;
 window.isRtcSupported = !!(window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection);
+window.isWSRelayEverything = false;
 
 class ServerConnection {
 
@@ -24,7 +25,17 @@ class ServerConnection {
 
     _onMessage(msg) {
         msg = JSON.parse(msg);
-        console.log('WS:', msg);
+        if (msg.type == 'relay') {
+            /*
+            if (msg.binary)
+                console.log('WS: Binary');
+            else
+                console.log('WS:', msg);
+            */
+        }
+        else {
+            console.log('WS:', msg);
+        }
         switch (msg.type) {
             case 'peers':
                 Events.fire('peers', msg.peers);
@@ -43,6 +54,21 @@ class ServerConnection {
                 break;
             case 'display-name':
                 Events.fire('display-name', msg);
+                break;
+            case 'relay':
+                if (msg.binary) {
+                    msg.message = (new Uint16Array([].map.call(msg.message, function(c) {
+                        return c.charCodeAt(0)
+                    }))).buffer.slice(0, msg.size);
+                    //console.log("Received binary: " + msg.message.byteLength);
+                }
+                else {
+                    //console.log("Received relayed message: " + JSON.stringify(msg));
+                }
+                if (!this._peers.peers[msg.sender]) {
+                    this._peers.peers[msg.sender] = new $WSPeer(this, msg.sender);
+                }
+                this._peers.peers[msg.sender]._onMessage(msg.message);
                 break;
             default:
                 console.error('WS: unkown message type', msg);
@@ -117,6 +143,11 @@ class Peer {
         this._sendFile(file);
     }
 
+    _sendFileChunk(chunk) {
+        //console.log("Sending file chunk, " + chunk.byteLength + " bytes: " + chunk);
+        this._send(chunk);
+    }
+
     _sendFile(file) {
         this.sendJSON({
             type: 'header',
@@ -125,7 +156,7 @@ class Peer {
             size: file.size
         });
         this._chunker = new FileChunker(file,
-            chunk => this._send(chunk),
+            chunk => this._sendFileChunk(chunk),
             offset => this._onPartitionEnd(offset));
         this._chunker.nextPartition();
     }
@@ -364,10 +395,12 @@ class PeersManager {
     constructor(serverConnection) {
         this.peers = {};
         this._server = serverConnection;
+        this._server._peers = this;
         Events.on('signal', e => this._onMessage(e.detail));
         Events.on('peers', e => this._onPeers(e.detail));
         Events.on('files-selected', e => this._onFilesSelected(e.detail));
         Events.on('send-text', e => this._onSendText(e.detail));
+        Events.on('peer-joined', e => this._onPeers([e.detail]));
         Events.on('peer-left', e => this._onPeerLeft(e.detail));
     }
 
@@ -386,21 +419,34 @@ class PeersManager {
             }
             if (window.isRtcSupported && peer.rtcSupported) {
                 this.peers[peer.id] = new RTCPeer(this._server, peer.id);
+                console.log("Adding RTC peer: " + peer.id);
             } else {
-                this.peers[peer.id] = new WSPeer(this._server, peer.id);
+                this.peers[peer.id] = new $WSPeer(this._server, peer.id);
+                console.log("Adding WS peer: " + peer.id);
             }
         })
     }
 
     sendTo(peerId, message) {
+        console.log("Sending to: " + peerId);
         this.peers[peerId].send(message);
     }
 
     _onFilesSelected(message) {
+        console.log("Sending files to: " + message.to);
+        if (!this.peers[message.to]) {
+            console.log("Peer not found: " + message.to);
+            return;
+        }
         this.peers[message.to].sendFiles(message.files);
     }
 
     _onSendText(message) {
+        console.log("Sending text to: " + message.to);
+        if (!this.peers[message.to]) {
+            console.log("Peer not found: " + message.to);
+            return;
+        }
         this.peers[message.to].sendText(message.text);
     }
 
@@ -417,6 +463,34 @@ class WSPeer {
     _send(message) {
         message.to = this._peerId;
         this._server.send(message);
+    }
+}
+
+class WSPeerExt extends Peer {
+
+    _send(payload) {
+
+        var msg = {
+            to: this._peerId,
+            type: 'relay',
+        };
+
+        if (payload instanceof ArrayBuffer) {
+            msg.size = payload.byteLength;
+            const bytes = new Uint8Array(msg.size + (msg.size % 2));
+            bytes.set(new Uint8Array(payload));
+            msg.message = String.fromCharCode.apply("", new Uint16Array(bytes.buffer));
+            msg.binary = true;
+        }
+        else {
+            msg.binary = false;
+            msg.message = payload;
+            //console.log("Relay message: " + JSON.stringify(msg));
+        }
+        this._server.send(msg);
+    }
+
+    refresh() {
     }
 }
 
@@ -521,3 +595,9 @@ RTCPeer.config = {
         urls: 'stun:stun.l.google.com:19302'
     }]
 }
+
+if (window.isWSRelayEverything)
+    $WSPeer = WSPeerExt;
+else
+    $WSPeer = WSPeer;
+

@@ -49,6 +49,7 @@ class SnapdropServer {
     }
 
     _onMessage(sender, message) {
+
         // Try to parse message 
         try {
             message = JSON.parse(message);
@@ -63,17 +64,24 @@ class SnapdropServer {
             case 'pong':
                 sender.lastBeat = Date.now();
                 break;
-        }
-
-        // relay message to recipient
-        if (message.to && this._rooms[sender.ip]) {
-            const recipientId = message.to; // TODO: sanitize
-            const recipient = this._rooms[sender.ip][recipientId];
-            delete message.to;
-            // add sender id
-            message.sender = sender.id;
-            this._send(recipient, message);
-            return;
+            case 'relay':
+                if (this._rooms[sender.ip]) {
+                    const recipientId = message.to;
+                    const recipient = this._rooms[sender.ip][recipientId];
+                    if (recipient) {
+                        delete message.to;
+                        message.sender = sender.id;
+                        //console.log("Relaying message to: " + recipient);
+                        this._send(recipient, message);
+                    }
+                    else {
+                        console.log("Recipient for relay not found: " + recipientId);
+                    }
+                }
+                else {
+                    console.log("Room for relaying not found!");
+                }
+                break;
         }
     }
 
@@ -196,7 +204,7 @@ class Peer {
         if (request.peerId) {
             this.id = request.peerId;
         } else {
-            this.id = request.headers.cookie.replace('peerid=', '');
+            this.id = request.headers.cookie.replace('peerid=', '').replace(/;.*/, '');
         }
     }
 
